@@ -1,6 +1,5 @@
 namespace jwt_gen.Models;
 
-/// <summary>Параметры JWT-токена.</summary>
 public sealed class JwtOptions
 {
     public required string Issuer { get; init; }

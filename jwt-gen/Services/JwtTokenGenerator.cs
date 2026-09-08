@@ -12,7 +12,7 @@ public sealed class JwtTokenGenerator : IJwtTokenGenerator
     {
         if (options.ExpiresInMinutes is <= 0)
         {
-            throw new ArgumentOutOfRangeException(nameof(options), "Срок действия должен быть больше нуля минут.");
+            throw new ArgumentOutOfRangeException(nameof(options), "The token lifetime must be greater than zero minutes.");
         }
 
         using var rsa = RSA.Create();

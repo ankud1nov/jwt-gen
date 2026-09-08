@@ -9,7 +9,7 @@ public sealed class RsaKeyPairService : IKeyPairService
     {
         if (keySize < 2048)
         {
-            throw new ArgumentOutOfRangeException(nameof(keySize), "Размер RSA-ключа должен быть не менее 2048 бит.");
+            throw new ArgumentOutOfRangeException(nameof(keySize), "The RSA key size must be at least 2048 bits.");
         }
 
         using var rsa = RSA.Create(keySize);
