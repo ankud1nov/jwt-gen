@@ -1,0 +1,45 @@
+using System.Security.Claims;
+using System.Security.Cryptography;
+using jwt_gen.Models;
+using Microsoft.IdentityModel.JsonWebTokens;
+using Microsoft.IdentityModel.Tokens;
+
+namespace jwt_gen.Services;
+
+public sealed class JwtTokenGenerator : IJwtTokenGenerator
+{
+    public string Generate(string privateKeyPem, JwtOptions options)
+    {
+        if (options.ExpiresInMinutes <= 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(options), "Срок действия должен быть больше нуля минут.");
+        }
+
+        using var rsa = RSA.Create();
+        rsa.ImportFromPem(privateKeyPem);
+
+        var claims = options.Claims
+            .Select(pair => new Claim(pair.Key, pair.Value))
+            .ToList();
+
+        if (!string.IsNullOrWhiteSpace(options.Subject))
+        {
+            claims.Add(new Claim(JwtRegisteredClaimNames.Sub, options.Subject));
+        }
+
+        var now = DateTime.UtcNow;
+        var descriptor = new SecurityTokenDescriptor
+        {
+            Issuer = options.Issuer,
+            Audience = options.Audience,
+            Subject = new ClaimsIdentity(claims),
+            NotBefore = now,
+            Expires = now.AddMinutes(options.ExpiresInMinutes),
+            SigningCredentials = new SigningCredentials(
+                new RsaSecurityKey(rsa),
+                SecurityAlgorithms.RsaSha256)
+        };
+
+        return new JsonWebTokenHandler().CreateToken(descriptor);
+    }
+}
