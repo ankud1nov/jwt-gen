@@ -102,10 +102,10 @@ dotnet publish .\jwt-gen\jwt-gen.csproj `
   -p:Version=0.1.0 `
   -o .\publish\win-x64
 
-New-Item -ItemType Directory -Force .\release | Out-Null
+New-Item -ItemType Directory -Force .\publish\release | Out-Null
 Compress-Archive `
   -Path .\publish\win-x64\jwt-gen.exe `
-  -DestinationPath .\release\jwt-gen-v0.1.0-win-x64.zip `
+  -DestinationPath .\publish\release\jwt-gen-v0.1.0-win-x64.zip `
   -Force
 ```
 
@@ -120,9 +120,9 @@ dotnet publish ./jwt-gen/jwt-gen.csproj \
   -p:Version=0.1.0 \
   -o ./publish/linux-x64
 
-mkdir -p ./release
+mkdir -p ./publish/release
 tar -C ./publish/linux-x64 \
-  -czf ./release/jwt-gen-v0.1.0-linux-x64.tar.gz \
+  -czf ./publish/release/jwt-gen-v0.1.0-linux-x64.tar.gz \
   jwt-gen
 ```
 
@@ -137,9 +137,9 @@ dotnet publish ./jwt-gen/jwt-gen.csproj \
   -p:Version=0.1.0 \
   -o ./publish/osx-arm64
 
-mkdir -p ./release
+mkdir -p ./publish/release
 tar -C ./publish/osx-arm64 \
-  -czf ./release/jwt-gen-v0.1.0-osx-arm64.tar.gz \
+  -czf ./publish/release/jwt-gen-v0.1.0-osx-arm64.tar.gz \
   jwt-gen
 ```
 
