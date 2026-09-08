@@ -32,7 +32,19 @@ dotnet run --project .\jwt-gen -- --help
 dotnet run --project .\jwt-gen -- generate --help
 ```
 
-Use `--claim name=value` more than once to add multiple claims.
+Use `--claim name=value` more than once to add multiple claims. Repeating the same claim name writes its values as a JSON array in the JWT payload:
+
+```powershell
+dotnet run --project .\jwt-gen -- generate `
+  --claim scope=read:hello-world `
+  --claim scope=write:hello-world
+```
+
+The resulting payload contains:
+
+```json
+"scope": ["read:hello-world", "write:hello-world"]
+```
 
 By default, generated tokens have no expiration (`exp`). To limit a token lifetime, pass a positive number of minutes explicitly, for example `--expires 60`. In the interactive wizard, leave `Token lifetime in minutes [unlimited]` empty to generate a token without an expiration.
 

@@ -1,7 +1,9 @@
 using System.Security.Cryptography;
+using System.Text.Json;
 using jwt_gen.Models;
 using jwt_gen.Services;
 using Microsoft.IdentityModel.JsonWebTokens;
+using Microsoft.IdentityModel.Tokens;
 using Xunit;
 
 namespace jwt_gen.Tests;
@@ -36,7 +38,27 @@ public sealed class JwtTokenGeneratorTests
         Assert.Throws<ArgumentOutOfRangeException>(() => GenerateToken(expiresInMinutes: 0));
     }
 
-    private static string GenerateToken(int? expiresInMinutes)
+    [Fact]
+    public void Generate_WithRepeatedClaimName_WritesClaimValuesAsArray()
+    {
+        var token = GenerateToken(
+            expiresInMinutes: 60,
+            claims: new Dictionary<string, IReadOnlyCollection<string>>
+            {
+                ["scope"] = ["read:hello-world", "write:hello-world"]
+            });
+
+        var jwt = new JsonWebTokenHandler().ReadJsonWebToken(token);
+        using var payload = JsonDocument.Parse(Base64UrlEncoder.Decode(jwt.EncodedPayload));
+        var scopes = payload.RootElement.GetProperty("scope");
+
+        Assert.Equal(JsonValueKind.Array, scopes.ValueKind);
+        Assert.Equal(["read:hello-world", "write:hello-world"], scopes.EnumerateArray().Select(value => value.GetString()));
+    }
+
+    private static string GenerateToken(
+        int? expiresInMinutes,
+        IReadOnlyDictionary<string, IReadOnlyCollection<string>>? claims = null)
     {
         using var rsa = RSA.Create(2048);
         var privateKeyPem = rsa.ExportPkcs8PrivateKeyPem();
@@ -47,7 +69,8 @@ public sealed class JwtTokenGeneratorTests
             {
                 Issuer = "test-issuer",
                 Audience = "test-audience",
-                ExpiresInMinutes = expiresInMinutes
+                ExpiresInMinutes = expiresInMinutes,
+                Claims = claims ?? new Dictionary<string, IReadOnlyCollection<string>>()
             });
     }
 }

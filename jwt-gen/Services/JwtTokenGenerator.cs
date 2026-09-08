@@ -19,7 +19,7 @@ public sealed class JwtTokenGenerator : IJwtTokenGenerator
         rsa.ImportFromPem(privateKeyPem);
 
         var claims = options.Claims
-            .Select(pair => new Claim(pair.Key, pair.Value))
+            .SelectMany(pair => pair.Value.Select(value => new Claim(pair.Key, value)))
             .ToList();
 
         if (!string.IsNullOrWhiteSpace(options.Subject))

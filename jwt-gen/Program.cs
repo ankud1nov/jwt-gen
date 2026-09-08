@@ -222,21 +222,21 @@ internal static class Program
         return 0;
     }
 
-    private static IReadOnlyDictionary<string, string> ReadClaims()
+    private static IReadOnlyDictionary<string, IReadOnlyCollection<string>> ReadClaims()
     {
-        var claims = new Dictionary<string, string>(StringComparer.Ordinal);
+        var claims = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         while (ReadLine("Add a claim? (y/N)", "N").Equals("y", StringComparison.OrdinalIgnoreCase))
         {
             var name = ReadRequired("Claim name");
-            claims[name] = ReadLine("Claim value", string.Empty);
+            AddClaim(claims, name, ReadLine("Claim value", string.Empty));
         }
 
-        return claims;
+        return ToReadOnlyClaims(claims);
     }
 
-    private static IReadOnlyDictionary<string, string> ParseClaims(string[]? values)
+    private static IReadOnlyDictionary<string, IReadOnlyCollection<string>> ParseClaims(string[]? values)
     {
-        var claims = new Dictionary<string, string>(StringComparer.Ordinal);
+        var claims = new Dictionary<string, List<string>>(StringComparer.Ordinal);
         foreach (var value in values ?? [])
         {
             var separator = value.IndexOf('=');
@@ -245,11 +245,29 @@ internal static class Program
                 throw new ArgumentException("Each --claim value must use the name=value format.");
             }
 
-            claims[value[..separator]] = value[(separator + 1)..];
+            AddClaim(claims, value[..separator], value[(separator + 1)..]);
         }
 
-        return claims;
+        return ToReadOnlyClaims(claims);
     }
+
+    private static void AddClaim(IDictionary<string, List<string>> claims, string name, string value)
+    {
+        if (!claims.TryGetValue(name, out var values))
+        {
+            values = [];
+            claims[name] = values;
+        }
+
+        values.Add(value);
+    }
+
+    private static IReadOnlyDictionary<string, IReadOnlyCollection<string>> ToReadOnlyClaims(
+        IReadOnlyDictionary<string, List<string>> claims) =>
+        claims.ToDictionary(
+            pair => pair.Key,
+            pair => (IReadOnlyCollection<string>)pair.Value,
+            StringComparer.Ordinal);
 
     private static string ReadLine(string prompt, string defaultValue)
     {
@@ -346,7 +364,7 @@ internal static class Program
         string Audience,
         string? Subject,
         int? ExpiresInMinutes,
-        IReadOnlyDictionary<string, string> Claims,
+        IReadOnlyDictionary<string, IReadOnlyCollection<string>> Claims,
         int KeySize,
         string? PrivateKeyPath,
         string? PrivateKeyPathToSave,

@@ -7,6 +7,6 @@ public sealed class JwtOptions
     public required string Audience { get; init; }
     public string? Subject { get; init; }
     public int? ExpiresInMinutes { get; init; }
-    public IReadOnlyDictionary<string, string> Claims { get; init; } =
-        new Dictionary<string, string>(StringComparer.Ordinal);
+    public IReadOnlyDictionary<string, IReadOnlyCollection<string>> Claims { get; init; } =
+        new Dictionary<string, IReadOnlyCollection<string>>(StringComparer.Ordinal);
 }
