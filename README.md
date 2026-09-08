@@ -19,6 +19,21 @@ When `--private-key .\private.pem` is specified, a new key pair is not generated
 
 Never publish or share the private key with API consumers. Consumers only need the public key to verify the signature.
 
+To use the interactive wizard instead of command-line options, run the application without arguments:
+
+```powershell
+dotnet run --project .\jwt-gen
+```
+
+The wizard provides a menu for generating a JWT, deriving a public key, or validating a key pair. For command-line usage, the application provides structured help and validation through `System.CommandLine`:
+
+```powershell
+dotnet run --project .\jwt-gen -- --help
+dotnet run --project .\jwt-gen -- generate --help
+```
+
+Use `--claim name=value` more than once to add multiple claims.
+
 ## Build and publish
 
 Build the project normally:

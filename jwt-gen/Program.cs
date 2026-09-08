@@ -1,3 +1,4 @@
+using System.CommandLine;
 using System.Globalization;
 using System.Security.Cryptography;
 using jwt_gen.Models;
@@ -8,53 +9,113 @@ namespace jwt_gen;
 internal static class Program
 {
     private const int DefaultRsaKeySize = 2048;
+    private const string DefaultIssuer = "jwt-gen";
+    private const string DefaultAudience = "api";
+    private const int DefaultExpirationMinutes = 60;
 
     public static int Main(string[] args)
     {
         try
         {
-            if (args.Length == 0 || HasOption(args, "--help") || HasOption(args, "-h"))
+            if (args.Length == 0)
             {
-                PrintHelp();
-                return 0;
+                return RunInteractive();
             }
 
-            if (string.Equals(args[0], "generate", StringComparison.OrdinalIgnoreCase))
+            var parseResult = BuildCommandLine().Parse(args);
+            return parseResult.Invoke(new InvocationConfiguration
             {
-                Generate(args[1..]);
-                return 0;
-            }
-
-            if (string.Equals(args[0], "public-key", StringComparison.OrdinalIgnoreCase))
-            {
-                GeneratePublicKey(args[1..]);
-                return 0;
-            }
-
-            if (string.Equals(args[0], "validate-key", StringComparison.OrdinalIgnoreCase))
-            {
-                ValidateKey(args[1..]);
-                return 0;
-            }
-
-            throw new ArgumentException($"Неизвестная команда '{args[0]}'. Используйте 'jwt-gen --help'.");
+                EnableDefaultExceptionHandler = true
+            });
         }
-        catch (Exception exception) when (exception is ArgumentException or FormatException or CryptographicException)
+        catch (Exception exception) when (exception is ArgumentException or FormatException or CryptographicException or IOException)
         {
-            Console.Error.WriteLine($"Ошибка: {exception.Message}");
-            Console.Error.WriteLine("Используйте 'jwt-gen --help' для справки.");
+            Console.Error.WriteLine($"Error: {exception.Message}");
             return 1;
         }
     }
 
-    private static void Generate(string[] args)
+    private static RootCommand BuildCommandLine()
     {
-        var options = new CommandLineOptions(args);
-        var keyService = new RsaKeyPairService();
-        var tokenGenerator = new JwtTokenGenerator();
-        var keyPair = LoadOrGenerateKeys(options, keyService);
+        var root = new RootCommand("Generate and manage RSA-signed JWTs.");
+        var generate = new Command("generate", "Generate an RSA key pair and a JWT.");
+        var issuer = new Option<string?>("--issuer") { Description = "Token issuer." };
+        var audience = new Option<string?>("--audience") { Description = "Token audience." };
+        var subject = new Option<string?>("--subject") { Description = "Token subject." };
+        var expires = new Option<int?>("--expires") { Description = "Token lifetime in minutes." };
+        var claim = new Option<string[]>("--claim") { Description = "Additional claim in name=value format." };
+        var keySize = new Option<int?>("--key-size") { Description = "RSA key size in bits." };
+        var privateKey = new Option<string?>("--private-key") { Description = "Use an existing private PEM key." };
+        var savePrivate = new Option<string?>("--save-private") { Description = "Save the private key to this path." };
+        var savePublic = new Option<string?>("--save-public") { Description = "Save the public key to this path." };
 
-        var token = tokenGenerator.Generate(
+        generate.Options.Add(issuer);
+        generate.Options.Add(audience);
+        generate.Options.Add(subject);
+        generate.Options.Add(expires);
+        generate.Options.Add(claim);
+        generate.Options.Add(keySize);
+        generate.Options.Add(privateKey);
+        generate.Options.Add(savePrivate);
+        generate.Options.Add(savePublic);
+        generate.SetAction(parseResult => Generate(new GenerateOptions(
+            parseResult.GetValue(issuer) ?? DefaultIssuer,
+            parseResult.GetValue(audience) ?? DefaultAudience,
+            parseResult.GetValue(subject),
+            parseResult.GetValue(expires) ?? DefaultExpirationMinutes,
+            ParseClaims(parseResult.GetValue(claim)),
+            parseResult.GetValue(keySize) ?? DefaultRsaKeySize,
+            parseResult.GetValue(privateKey),
+            parseResult.GetValue(savePrivate),
+            parseResult.GetValue(savePublic))));
+
+        var publicKey = new Command("public-key", "Derive a public key from a private PEM key.");
+        var publicKeyPrivatePath = new Option<string?>("--private-key")
+        {
+            Description = "Path to the private PEM key.",
+            Required = true
+        };
+        var publicKeySavePath = new Option<string?>("--save-public") { Description = "Save the public PEM key to this path." };
+        publicKey.Options.Add(publicKeyPrivatePath);
+        publicKey.Options.Add(publicKeySavePath);
+        publicKey.SetAction(parseResult => GeneratePublicKey(
+            RequireValue(parseResult.GetValue(publicKeyPrivatePath), "--private-key"),
+            parseResult.GetValue(publicKeySavePath)));
+
+        var validateKey = new Command("validate-key", "Validate a private and public key pair.");
+        var validatePrivatePath = new Option<string?>("--private-key")
+        {
+            Description = "Path to the private PEM key.",
+            Required = true
+        };
+        var validatePublicPath = new Option<string?>("--public-key")
+        {
+            Description = "Path to the public PEM key.",
+            Required = true
+        };
+        validateKey.Options.Add(validatePrivatePath);
+        validateKey.Options.Add(validatePublicPath);
+        validateKey.SetAction(parseResult => ValidateKey(
+            RequireValue(parseResult.GetValue(validatePrivatePath), "--private-key"),
+            RequireValue(parseResult.GetValue(validatePublicPath), "--public-key")));
+
+        root.Subcommands.Add(generate);
+        root.Subcommands.Add(publicKey);
+        root.Subcommands.Add(validateKey);
+        return root;
+    }
+
+    private static void Generate(GenerateOptions options)
+    {
+        ValidatePositive(options.ExpiresInMinutes, "--expires");
+        ValidatePositive(options.KeySize, "--key-size");
+
+        var keyService = new RsaKeyPairService();
+        var keyPair = string.IsNullOrWhiteSpace(options.PrivateKeyPath)
+            ? keyService.Generate(options.KeySize)
+            : LoadKeys(options.PrivateKeyPath, keyService);
+
+        var token = new JwtTokenGenerator().Generate(
             keyPair.PrivateKeyPem,
             new JwtOptions
             {
@@ -68,48 +129,38 @@ internal static class Program
         WriteIfSpecified(options.PrivateKeyPathToSave, keyPair.PrivateKeyPem);
         WriteIfSpecified(options.PublicKeyPath, keyPair.PublicKeyPem);
 
-        Console.WriteLine("=== Приватный RSA-ключ (храните в секрете) ===");
+        Console.WriteLine("=== Private RSA key (keep it secret) ===");
         Console.WriteLine(keyPair.PrivateKeyPem);
-        Console.WriteLine("=== Публичный RSA-ключ ===");
+        Console.WriteLine("=== Public RSA key ===");
         Console.WriteLine(keyPair.PublicKeyPem);
         Console.WriteLine("=== JWT ===");
         Console.WriteLine(token);
     }
 
-    private static RsaKeyPair LoadOrGenerateKeys(CommandLineOptions options, IKeyPairService keyService)
+    private static RsaKeyPair LoadKeys(string privateKeyPath, IKeyPairService keyService)
     {
-        if (string.IsNullOrWhiteSpace(options.PrivateKeyPath))
-        {
-            return keyService.Generate(options.KeySize);
-        }
-
-        var privateKeyPem = File.ReadAllText(options.PrivateKeyPath);
+        var privateKeyPem = File.ReadAllText(privateKeyPath);
         return new RsaKeyPair(privateKeyPem, keyService.ExportPublicKey(privateKeyPem));
     }
 
-    private static void GeneratePublicKey(string[] args)
+    private static void GeneratePublicKey(string privateKeyPath, string? savePublicPath)
     {
-        var privateKeyPath = GetRequiredOption(args, "--private-key");
-        var savePublicPath = GetOption(args, "--save-public");
         var keyService = new RsaKeyPairService();
         var publicKeyPem = keyService.ExportPublicKey(File.ReadAllText(privateKeyPath));
-
         WriteIfSpecified(savePublicPath, publicKeyPem);
         Console.WriteLine(publicKeyPem);
     }
 
-    private static void ValidateKey(string[] args)
+    private static void ValidateKey(string privateKeyPath, string publicKeyPath)
     {
-        var privateKeyPath = GetRequiredOption(args, "--private-key");
-        var publicKeyPath = GetRequiredOption(args, "--public-key");
         var keyService = new RsaKeyPairService();
         var isValid = keyService.ValidateKeyPair(
             File.ReadAllText(privateKeyPath),
             File.ReadAllText(publicKeyPath));
 
         Console.WriteLine(isValid
-            ? "Публичный ключ соответствует приватному."
-            : "Публичный ключ НЕ соответствует приватному.");
+            ? "The public key matches the private key."
+            : "The public key does NOT match the private key.");
 
         if (!isValid)
         {
@@ -117,119 +168,165 @@ internal static class Program
         }
     }
 
+    private static int RunInteractive()
+    {
+        Console.WriteLine("jwt-gen - RSA JWT generator");
+        Console.WriteLine();
+        Console.WriteLine("1. Generate JWT");
+        Console.WriteLine("2. Derive public key");
+        Console.WriteLine("3. Validate key pair");
+        Console.WriteLine("0. Exit");
+        Console.WriteLine();
+
+        return ReadLine("Select an action", "1") switch
+        {
+            "1" => RunInteractiveGenerate(),
+            "2" => RunInteractivePublicKey(),
+            "3" => RunInteractiveValidateKey(),
+            "0" => 0,
+            _ => throw new ArgumentException("Unknown menu option.")
+        };
+    }
+
+    private static int RunInteractiveGenerate()
+    {
+        var privateKeyPath = ReadOptionalPath("Existing private key path (leave empty to generate a new key)");
+        var options = new GenerateOptions(
+            ReadLine("Issuer", DefaultIssuer),
+            ReadLine("Audience", DefaultAudience),
+            ReadOptional("Subject"),
+            ReadPositiveInt("Token lifetime in minutes", DefaultExpirationMinutes),
+            ReadClaims(),
+            ReadPositiveInt("RSA key size in bits", DefaultRsaKeySize),
+            privateKeyPath,
+            ReadOptionalPath("Save private key to"),
+            ReadOptionalPath("Save public key to"));
+
+        Generate(options);
+        return 0;
+    }
+
+    private static int RunInteractivePublicKey()
+    {
+        GeneratePublicKey(
+            ReadRequired("Private key path"),
+            ReadOptionalPath("Save public key to"));
+        return 0;
+    }
+
+    private static int RunInteractiveValidateKey()
+    {
+        ValidateKey(ReadRequired("Private key path"), ReadRequired("Public key path"));
+        return 0;
+    }
+
+    private static IReadOnlyDictionary<string, string> ReadClaims()
+    {
+        var claims = new Dictionary<string, string>(StringComparer.Ordinal);
+        while (ReadLine("Add a claim? (y/N)", "N").Equals("y", StringComparison.OrdinalIgnoreCase))
+        {
+            var name = ReadRequired("Claim name");
+            claims[name] = ReadLine("Claim value", string.Empty);
+        }
+
+        return claims;
+    }
+
+    private static IReadOnlyDictionary<string, string> ParseClaims(string[]? values)
+    {
+        var claims = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var value in values ?? [])
+        {
+            var separator = value.IndexOf('=');
+            if (separator <= 0)
+            {
+                throw new ArgumentException("Each --claim value must use the name=value format.");
+            }
+
+            claims[value[..separator]] = value[(separator + 1)..];
+        }
+
+        return claims;
+    }
+
+    private static string ReadLine(string prompt, string defaultValue)
+    {
+        Console.Write($"{prompt} [{defaultValue}]: ");
+        var value = Console.ReadLine();
+        return string.IsNullOrWhiteSpace(value) ? defaultValue : value.Trim();
+    }
+
+    private static string ReadRequired(string prompt)
+    {
+        while (true)
+        {
+            var value = ReadLine(prompt, string.Empty);
+            if (!string.IsNullOrWhiteSpace(value))
+            {
+                return value;
+            }
+
+            Console.WriteLine("A value is required.");
+        }
+    }
+
+    private static string? ReadOptional(string prompt)
+    {
+        var value = ReadLine(prompt, string.Empty);
+        return string.IsNullOrWhiteSpace(value) ? null : value;
+    }
+
+    private static string? ReadOptionalPath(string prompt)
+    {
+        Console.Write($"{prompt} [optional]: ");
+        var value = Console.ReadLine();
+        return string.IsNullOrWhiteSpace(value) ? null : value.Trim();
+    }
+
+    private static int ReadPositiveInt(string prompt, int defaultValue)
+    {
+        while (true)
+        {
+            var value = ReadLine(prompt, defaultValue.ToString(CultureInfo.InvariantCulture));
+            if (int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var result) && result > 0)
+            {
+                return result;
+            }
+
+            Console.WriteLine("Enter a positive integer.");
+        }
+    }
+
+    private static void ValidatePositive(int value, string option)
+    {
+        if (value <= 0)
+        {
+            throw new ArgumentException($"{option} must be a positive integer.");
+        }
+    }
+
+    private static string RequireValue(string? value, string option) =>
+        string.IsNullOrWhiteSpace(value)
+            ? throw new ArgumentException($"The {option} option is required.")
+            : value;
+
     private static void WriteIfSpecified(string? path, string content)
     {
         if (!string.IsNullOrWhiteSpace(path))
         {
             File.WriteAllText(path, content);
-            Console.WriteLine($"Сохранено: {Path.GetFullPath(path)}");
+            Console.WriteLine($"Saved: {Path.GetFullPath(path)}");
         }
     }
 
-    private static bool HasOption(string[] args, string option) =>
-        args.Any(arg => string.Equals(arg, option, StringComparison.OrdinalIgnoreCase));
-
-    private static void PrintHelp()
-    {
-        Console.WriteLine("Генератор RSA JWT");
-        Console.WriteLine();
-        Console.WriteLine("Использование:");
-        Console.WriteLine("  jwt-gen generate [параметры]");
-        Console.WriteLine("  jwt-gen public-key --private-key <путь> [--save-public <путь>]");
-        Console.WriteLine("  jwt-gen validate-key --private-key <путь> --public-key <путь>");
-        Console.WriteLine();
-        Console.WriteLine("Параметры:");
-        Console.WriteLine("  --issuer <значение>       Issuer - кто выпустил токен. (по умолчанию: jwt-gen)");
-        Console.WriteLine("  --audience <значение>     Audience — для какого сервиса предназначен токен. (по умолчанию: api)");
-        Console.WriteLine("  --subject <значение>      Subject — идентификатор пользователя или субъекта токена. (Например: user-123)");
-        Console.WriteLine("  --expires <минуты>        Срок действия JWT в минутах. (по умолчанию: 60)");
-        Console.WriteLine("  --claim name=value        Дополнительный claim; можно указывать несколько раз");
-        Console.WriteLine("  --key-size <бит>          Размер нового RSA-ключа (по умолчанию: 2048)");
-        Console.WriteLine("  --private-key <путь>      Использовать существующий приватный PEM-ключ");
-        Console.WriteLine("  --save-private <путь>     Сохранить приватный ключ в файл");
-        Console.WriteLine("  --save-public <путь>      Сохранить публичный ключ в файл");
-        Console.WriteLine("  --help                    Показать эту справку");
-    }
-
-    private static string? GetOption(string[] args, string option)
-    {
-        var index = Array.FindIndex(args, arg => string.Equals(arg, option, StringComparison.OrdinalIgnoreCase));
-        if (index < 0)
-        {
-            return null;
-        }
-
-        if (index + 1 >= args.Length || args[index + 1].StartsWith("--", StringComparison.Ordinal))
-        {
-            throw new ArgumentException($"Для параметра {option} требуется значение.");
-        }
-
-        return args[index + 1];
-    }
-
-    private static string GetRequiredOption(string[] args, string option) =>
-        GetOption(args, option) ?? throw new ArgumentException($"Необходимо указать параметр {option}.");
-
-    private sealed class CommandLineOptions
-    {
-        public CommandLineOptions(string[] args)
-        {
-            var claims = new Dictionary<string, string>(StringComparer.Ordinal);
-            for (var index = 0; index < args.Length; index++)
-            {
-                var option = args[index];
-                switch (option)
-                {
-                    case "--issuer": Issuer = ReadValue(args, ref index, option); break;
-                    case "--audience": Audience = ReadValue(args, ref index, option); break;
-                    case "--subject": Subject = ReadValue(args, ref index, option); break;
-                    case "--expires": ExpiresInMinutes = ParsePositiveInt(ReadValue(args, ref index, option), option); break;
-                    case "--key-size": KeySize = ParsePositiveInt(ReadValue(args, ref index, option), option); break;
-                    case "--claim": AddClaim(claims, ReadValue(args, ref index, option)); break;
-                    case "--private-key": PrivateKeyPath = ReadValue(args, ref index, option); break;
-                    case "--save-private": PrivateKeyPathToSave = ReadValue(args, ref index, option); break;
-                    case "--save-public": PublicKeyPath = ReadValue(args, ref index, option); break;
-                    default: throw new ArgumentException($"Неизвестный параметр '{option}'.");
-                }
-            }
-
-            Claims = claims;
-        }
-
-        public string Issuer { get; } = "jwt-gen";
-        public string Audience { get; } = "api";
-        public string? Subject { get; }
-        public int ExpiresInMinutes { get; } = 60;
-        public int KeySize { get; } = DefaultRsaKeySize;
-        public string? PrivateKeyPath { get; }
-        public string? PrivateKeyPathToSave { get; }
-        public string? PublicKeyPath { get; }
-        public IReadOnlyDictionary<string, string> Claims { get; }
-
-        private static string ReadValue(string[] args, ref int index, string option)
-        {
-            if (++index >= args.Length || args[index].StartsWith("--", StringComparison.Ordinal))
-            {
-                throw new ArgumentException($"Для параметра {option} требуется значение.");
-            }
-
-            return args[index];
-        }
-
-        private static int ParsePositiveInt(string value, string option) =>
-            int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var result) && result > 0
-                ? result
-                : throw new ArgumentException($"Параметр {option} должен быть положительным целым числом.");
-
-        private static void AddClaim(IDictionary<string, string> claims, string value)
-        {
-            var separator = value.IndexOf('=');
-            if (separator <= 0)
-            {
-                throw new ArgumentException("Claim должен иметь формат name=value.");
-            }
-
-            claims[value[..separator]] = value[(separator + 1)..];
-        }
-    }
+    private sealed record GenerateOptions(
+        string Issuer,
+        string Audience,
+        string? Subject,
+        int ExpiresInMinutes,
+        IReadOnlyDictionary<string, string> Claims,
+        int KeySize,
+        string? PrivateKeyPath,
+        string? PrivateKeyPathToSave,
+        string? PublicKeyPath);
 }
