@@ -10,7 +10,7 @@ public sealed class JwtTokenGenerator : IJwtTokenGenerator
 {
     public string Generate(string privateKeyPem, JwtOptions options)
     {
-        if (options.ExpiresInMinutes <= 0)
+        if (options.ExpiresInMinutes is <= 0)
         {
             throw new ArgumentOutOfRangeException(nameof(options), "Срок действия должен быть больше нуля минут.");
         }
@@ -33,13 +33,19 @@ public sealed class JwtTokenGenerator : IJwtTokenGenerator
             Issuer = options.Issuer,
             Audience = options.Audience,
             Subject = new ClaimsIdentity(claims),
+            IssuedAt = now,
             NotBefore = now,
-            Expires = now.AddMinutes(options.ExpiresInMinutes),
+            Expires = options.ExpiresInMinutes is { } expiresInMinutes
+                ? now.AddMinutes(expiresInMinutes)
+                : null,
             SigningCredentials = new SigningCredentials(
                 new RsaSecurityKey(rsa),
                 SecurityAlgorithms.RsaSha256)
         };
 
-        return new JsonWebTokenHandler().CreateToken(descriptor);
+        return new JsonWebTokenHandler
+        {
+            SetDefaultTimesOnTokenCreation = false
+        }.CreateToken(descriptor);
     }
 }

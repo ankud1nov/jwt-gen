@@ -11,7 +11,6 @@ internal static class Program
     private const int DefaultRsaKeySize = 2048;
     private const string DefaultIssuer = "jwt-gen";
     private const string DefaultAudience = "api";
-    private const int DefaultExpirationMinutes = 60;
 
     public static int Main(string[] args)
     {
@@ -42,7 +41,7 @@ internal static class Program
         var issuer = new Option<string?>("--issuer") { Description = "Token issuer." };
         var audience = new Option<string?>("--audience") { Description = "Token audience." };
         var subject = new Option<string?>("--subject") { Description = "Token subject." };
-        var expires = new Option<int?>("--expires") { Description = "Token lifetime in minutes." };
+        var expires = new Option<int?>("--expires") { Description = "Token lifetime in minutes. Omit for unlimited." };
         var claim = new Option<string[]>("--claim") { Description = "Additional claim in name=value format." };
         var keySize = new Option<int?>("--key-size") { Description = "RSA key size in bits." };
         var privateKey = new Option<string?>("--private-key") { Description = "Use an existing private PEM key." };
@@ -62,7 +61,7 @@ internal static class Program
             parseResult.GetValue(issuer) ?? DefaultIssuer,
             parseResult.GetValue(audience) ?? DefaultAudience,
             parseResult.GetValue(subject),
-            parseResult.GetValue(expires) ?? DefaultExpirationMinutes,
+            parseResult.GetValue(expires),
             ParseClaims(parseResult.GetValue(claim)),
             parseResult.GetValue(keySize) ?? DefaultRsaKeySize,
             parseResult.GetValue(privateKey),
@@ -107,7 +106,10 @@ internal static class Program
 
     private static void Generate(GenerateOptions options)
     {
-        ValidatePositive(options.ExpiresInMinutes, "--expires");
+        if (options.ExpiresInMinutes is { } expiresInMinutes)
+        {
+            ValidatePositive(expiresInMinutes, "--expires");
+        }
         ValidatePositive(options.KeySize, "--key-size");
 
         var keyService = new RsaKeyPairService();
@@ -195,7 +197,7 @@ internal static class Program
             ReadLine("Issuer", DefaultIssuer),
             ReadLine("Audience", DefaultAudience),
             ReadOptional("Subject"),
-            ReadPositiveInt("Token lifetime in minutes", DefaultExpirationMinutes),
+            ReadOptionalPositiveInt("Token lifetime in minutes"),
             ReadClaims(),
             ReadPositiveInt("RSA key size in bits", DefaultRsaKeySize),
             privateKeyPath,
@@ -297,6 +299,26 @@ internal static class Program
         }
     }
 
+    private static int? ReadOptionalPositiveInt(string prompt)
+    {
+        while (true)
+        {
+            Console.Write($"{prompt} [unlimited]: ");
+            var value = Console.ReadLine();
+            if (string.IsNullOrWhiteSpace(value))
+            {
+                return null;
+            }
+
+            if (int.TryParse(value, NumberStyles.Integer, CultureInfo.InvariantCulture, out var result) && result > 0)
+            {
+                return result;
+            }
+
+            Console.WriteLine("Enter a positive integer or leave empty for an unlimited token.");
+        }
+    }
+
     private static void ValidatePositive(int value, string option)
     {
         if (value <= 0)
@@ -323,7 +345,7 @@ internal static class Program
         string Issuer,
         string Audience,
         string? Subject,
-        int ExpiresInMinutes,
+        int? ExpiresInMinutes,
         IReadOnlyDictionary<string, string> Claims,
         int KeySize,
         string? PrivateKeyPath,
